@@ -1,0 +1,1493 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Org Chart Viewer — Before / After Demo (Synthetic Data)</title>
+  <!--
+  index.html — self-contained BEFORE -> Enhance -> AFTER demo for the org-chart viewer.
+
+  100% synthetic. Loads the authoritative engine (orgchart.core.js) and the fictional
+  "Northwind Logistics" data set (fake-data.js) via plain <script> tags — no build step,
+  no network calls, no external images (avatars are inline SVG monograms).
+
+  BEFORE  = a light, top-down tree replica of the raw directory tool: the top person at the
+            top center, direct reports in rows beneath, each node a square avatar with the
+            login beneath and a +/- toggle, connector lines, plus a right-side light
+            "Management Chain" sidebar listing the (synthetic) chain above the top person.
+            Starts collapsed, pans freely by click-drag (transform translate, no scrollbars).
+  ENHANCE = OrgChartCore.renderSiteChart() produces the compact, staggered, fit-to-viewport
+            view scoped to the selected site (anchor-root + prune + fit-to-screen).
+  RESET   = restores the BEFORE tree.
+-->
+  <style>
+    :root {
+      --bg: #0f1420;
+      --panel: #19202e;
+      --panel-2: #212a3b;
+      --ink: #eef2f8;
+      --ink-dim: #9fb0c7;
+      --line: #38475f;
+      --accent: #4f9dff;
+      --chip-bg: #1d2636;
+      --chip-line: #3a4a65;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      height: 100%;
+      margin: 0;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--ink);
+      font-family: "Segoe UI", Roboto, Arial, sans-serif;
+      display: flex;
+      /* column-reverse puts the toolbar (first DOM child) at the BOTTOM of the screen,
+         reachable on a wall-mounted TV, with the chart filling the area above it. */
+      flex-direction: column-reverse;
+      overflow: hidden;
+    }
+
+    header.toolbar {
+      flex: 0 0 auto;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 10px 16px;
+      background: var(--panel);
+      border-top: 1px solid var(--line);
+      flex-wrap: wrap;
+    }
+
+    header.toolbar .title {
+      font-weight: 600;
+      font-size: 16px;
+      margin-right: 6px;
+    }
+
+    header.toolbar .mode-tag {
+      font-size: 12px;
+      color: var(--ink-dim);
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 2px 10px;
+    }
+
+    header.toolbar label {
+      font-size: 13px;
+      color: var(--ink-dim);
+    }
+
+    header.toolbar select,
+    header.toolbar button {
+      font: inherit;
+      font-size: 14px;
+      background: var(--panel-2);
+      color: var(--ink);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 7px 12px;
+      cursor: pointer;
+    }
+
+    header.toolbar #zoomInBtn,
+    header.toolbar #zoomOutBtn {
+      min-width: 34px;
+      text-align: center;
+      font-weight: 700;
+    }
+
+    header.toolbar button.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #06142a;
+      font-weight: 600;
+    }
+
+    header.toolbar button:focus-visible,
+    header.toolbar select:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    header.toolbar .spacer {
+      flex: 1 1 auto;
+    }
+
+    header.toolbar .note {
+      font-size: 12px;
+      color: var(--ink-dim);
+    }
+
+    /* ---- Load gate: dim + "click to load" affordance + single-flight guard --------- */
+    /* The toolbar starts DIMMED and non-interactive until the chart is loaded; a full-width
+       hint overlay invites the first click and also blocks interaction while a load is in
+       progress (the single-flight concurrency guard lives in createLoadGate). */
+    header.toolbar.dim {
+      opacity: .5;
+    }
+
+    #toolbarHint {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      z-index: 60;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      background: rgba(15, 20, 32, .55);
+      color: var(--ink);
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: .02em;
+      cursor: pointer;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+
+    #toolbarHint.loading {
+      cursor: progress;
+    }
+
+    /* Stage: BEFORE lives in #before (scrolls), AFTER lives in #after (fits). */
+    main {
+      flex: 1 1 auto;
+      position: relative;
+      min-height: 0;
+    }
+
+    /* ---- BEFORE: LIGHT top-down tree + management-chain sidebar -------------------- */
+    /* Mirrors the native directory tool's look: a white canvas of square photo + login
+       nodes with +/- toggles and connector lines, plus a right-side light "Management
+       Chain" rail. Light theme variables are scoped to #before so the dark toolbar and
+       the compact AFTER view are left untouched. */
+    #before {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      background: #ffffff;
+      color: #16191f;
+      --b-line: #c9d2dc;
+      --b-link: #0a66b2;
+      --b-rail: #f4f6f8;
+      --b-card: #ffffff;
+      --b-muted: #5a6b7b;
+    }
+
+    #before .canvas-scroll {
+      flex: 1 1 auto;
+      overflow: hidden;
+      /* no scrollbars — reach far nodes by click-drag transform panning */
+      position: relative;
+      cursor: grab;
+      background: #ffffff;
+      touch-action: none;
+    }
+
+    #before .canvas {
+      position: absolute;
+      left: 0;
+      top: 0;
+      transform-origin: 0 0;
+      will-change: transform;
+      /* nodes are absolutely positioned inside; the whole canvas is transform-panned */
+    }
+
+    #before .mgmt-chain {
+      flex: 0 0 220px;
+      border-left: 1px solid var(--b-line);
+      background: var(--b-rail);
+      padding: 14px 12px;
+      overflow: auto;
+      color: #16191f;
+    }
+
+    #before .mgmt-chain h2 {
+      font-size: 12px;
+      margin: 0 0 12px;
+      color: var(--b-muted);
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+    }
+
+    #before .mgmt-chain .mc-item {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+      padding: 8px;
+      background: var(--b-card);
+      border: 1px solid var(--b-line);
+      border-radius: 8px;
+    }
+
+    #before .mgmt-chain .mc-item img {
+      width: 46px;
+      height: 46px;
+      border-radius: 6px;
+      border: 1px solid var(--b-line);
+    }
+
+    #before .mgmt-chain .mc-item .mc-login {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--b-link);
+    }
+
+    #before .mgmt-chain .mc-item .mc-name {
+      font-size: 11px;
+      color: var(--b-muted);
+      text-align: center;
+      line-height: 1.2;
+    }
+
+    #before .mgmt-chain .mc-arrow {
+      text-align: center;
+      color: var(--b-muted);
+      font-size: 14px;
+      line-height: 1;
+      margin: 4px 0;
+    }
+
+    /* a raw BEFORE node: square photo, login beneath, +/- toggle — no card chrome,
+       exactly like the native tool's plain nodes */
+    .raw-node {
+      position: absolute;
+      width: 92px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      gap: 3px;
+    }
+
+    .raw-node .rn-up {
+      width: 18px;
+      height: 14px;
+      display: block;
+      opacity: .7;
+    }
+
+    .raw-node img.rn-photo {
+      width: 54px;
+      height: 54px;
+      border-radius: 6px;
+      border: 1px solid var(--b-line);
+    }
+
+    .raw-node .rn-login {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--b-link);
+      line-height: 1.1;
+      word-break: break-all;
+    }
+
+    .raw-node .raw-toggle {
+      width: 18px;
+      height: 18px;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      cursor: pointer;
+      line-height: 0;
+    }
+
+    .raw-node .raw-toggle svg {
+      display: block;
+    }
+
+    #before svg.raw-edges {
+      position: absolute;
+      left: 0;
+      top: 0;
+      pointer-events: none;
+    }
+
+    #before svg.raw-edges path {
+      stroke: var(--b-line);
+      stroke-width: 1.5;
+      fill: none;
+    }
+
+    /* ---- AFTER: compact engine output --------------------------------------------- */
+    #after {
+      position: absolute;
+      inset: 0;
+      display: none;
+    }
+
+    /* Chip styling consumed by OrgChartCore.renderChart (classes defined by the engine). */
+    .oc-stage {
+      will-change: transform;
+    }
+
+    /* Dragging anywhere on the chart pans it: never select text or ghost-drag a photo. */
+    .oc-stage,
+    .oc-chip {
+      -webkit-user-select: none;
+      -moz-user-select: none;
+      -ms-user-select: none;
+      user-select: none;
+    }
+
+    /* Nodes are clickable, so show the pointer hand on hover. The container keeps grab for the
+       pannable empty area; the press/drag states below override to grab/grabbing (even over a
+       chip) so a pan still reads as a pan. The more-specific .oc-toggle rule still shows a
+       pointer on the +/- button, and chip children inherit the chip's pointer. */
+    .oc-pan-container {
+      cursor: grab;
+    }
+
+    .oc-chip {
+      cursor: pointer;
+    }
+
+    .oc-chip * {
+      cursor: inherit;
+    }
+
+    .oc-pan-container.oc-pressing,
+    .oc-pan-container.oc-pressing .oc-chip {
+      cursor: grab;
+    }
+
+    .oc-pan-container.oc-dragging,
+    .oc-pan-container.oc-dragging .oc-chip {
+      cursor: grabbing;
+    }
+
+    .oc-edges path.oc-edge {
+      stroke: var(--accent);
+      stroke-width: 1.5;
+      opacity: .6;
+    }
+
+    .oc-chip {
+      background: var(--chip-bg);
+      border: 1px solid var(--chip-line);
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, .35);
+    }
+
+    /* Color by role: thicken the tier-colored border so it stays visible when zoomed out.
+       box-sizing:border-box keeps the border inside the chip's fixed w/h, so card geometry,
+       spacing and connector-edge anchor points are identical to the default 1px border. */
+    .oc-chip.oc-role-colored {
+      border-width: 3px;
+      box-sizing: border-box;
+    }
+
+    .oc-chip .oc-avatar {
+      width: 56px;
+      height: 56px;
+      border-radius: 10px;
+      flex: 0 0 auto;
+      -webkit-user-drag: none;
+      -khtml-user-drag: none;
+      -moz-user-drag: none;
+      -o-user-drag: none;
+      user-drag: none;
+    }
+
+    .oc-chip .oc-info {
+      min-width: 0;
+    }
+
+    .oc-chip .oc-name {
+      font-size: 15px;
+      font-weight: 700;
+      line-height: 1.15;
+    }
+
+    .oc-chip .oc-title {
+      font-size: 12px;
+      color: var(--ink-dim);
+      line-height: 1.2;
+    }
+
+    .oc-chip .oc-site {
+      font-size: 11px;
+      color: var(--ink-dim);
+      line-height: 1.2;
+    }
+
+    /* Compact People: photo-dominant chip (big avatar + name only; details stay in the
+       click popup). Smaller footprint drives tighter stacking so auto-fit zooms in more. */
+    .oc-chip.oc-compact {
+      flex-direction: column-reverse;
+      gap: 5px;
+      padding: 7px 6px 9px;
+      justify-content: center;
+    }
+
+    .oc-chip.oc-compact .oc-avatar {
+      width: 76px;
+      height: 76px;
+      border-radius: 12px;
+    }
+
+    .oc-chip.oc-compact .oc-info {
+      width: 100%;
+      text-align: center;
+      overflow: hidden;
+    }
+
+    .oc-chip.oc-compact .oc-name {
+      font-size: 12px;
+      line-height: 1.1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .oc-chip.oc-compact .oc-toggle {
+      right: 4px;
+      bottom: 4px;
+      width: 26px;
+      height: 26px;
+      line-height: 24px;
+      font-size: 16px;
+    }
+
+    .oc-chip.oc-compact .oc-reveal {
+      left: 4px;
+      bottom: 4px;
+      height: 20px;
+      min-width: 26px;
+      line-height: 18px;
+      padding: 0 6px;
+      font-size: 11px;
+    }
+
+    .oc-chip .oc-toggle {
+      position: absolute;
+      right: 6px;
+      bottom: 6px;
+      width: 38px;
+      height: 38px;
+      line-height: 36px;
+      text-align: center;
+      border-radius: 50%;
+      border: 1px solid var(--chip-line);
+      background: var(--panel-2);
+      color: var(--ink);
+      cursor: pointer;
+      font-size: 20px;
+      padding: 0;
+    }
+
+    /* Per-manager +N local-reveal control. Pill-shaped, anchored bottom-LEFT so it never
+       overlaps the circular +/- toggle (bottom-right). Visually distinct (accent border,
+       smaller); filled accent in its `revealed` re-hide state. */
+    .oc-chip .oc-reveal {
+      position: absolute;
+      left: 6px;
+      bottom: 6px;
+      height: 24px;
+      min-width: 30px;
+      line-height: 22px;
+      padding: 0 8px;
+      text-align: center;
+      border-radius: 12px;
+      border: 1px solid var(--accent, #4f9dff);
+      background: var(--panel-2);
+      color: var(--accent, #4f9dff);
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .oc-chip .oc-reveal.revealed {
+      background: var(--accent, #4f9dff);
+      border-color: var(--accent, #4f9dff);
+      color: var(--panel-2);
+    }
+
+    /* Hide-levels panel: a small popup of per-title checkboxes (check to hide a level). */
+    #hideLevelsPanel {
+      position: fixed;
+      left: 16px;
+      bottom: 64px;
+      z-index: 50;
+      display: none;
+      max-height: 60vh;
+      overflow: auto;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 12px 14px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, .4);
+      min-width: 240px;
+    }
+
+    #hideLevelsPanel.open {
+      display: block;
+    }
+
+    #hideLevelsPanel h3 {
+      margin: 0 0 4px;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--ink);
+    }
+
+    #hideLevelsPanel .hint {
+      margin: 0 0 8px;
+      font-size: 11px;
+      color: var(--ink-dim);
+    }
+
+    #hideLevelsPanel label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 0;
+      font-size: 13px;
+      color: var(--ink);
+      cursor: pointer;
+    }
+
+    #hideLevelsPanel label.disabled {
+      opacity: .5;
+      cursor: not-allowed;
+    }
+
+    #hideLevelsPanel .empty {
+      font-size: 13px;
+      color: var(--ink-dim);
+    }
+
+    /* Click-a-chip detail popup: larger readable text, dark theme matching the chips, and a
+       z-index above the chart so it is never clipped. Text IS selectable here (so details can
+       be copied) and interacting with it never pans the chart. */
+    .oc-popup {
+      position: fixed;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      z-index: 2147483600;
+      background: var(--chip-bg);
+      border: 1px solid var(--chip-line);
+      border-radius: 14px;
+      padding: 22px 26px;
+      min-width: 280px;
+      max-width: min(90vw, 460px);
+      max-height: 80vh;
+      /* Visible so the speech-bubble caret, which sits just outside the box, isn't clipped. */
+      overflow: visible;
+      box-shadow: 0 10px 40px rgba(0, 0, 0, .55);
+      color: var(--ink);
+      line-height: 1.4;
+      /* The whole bubble uses the default arrow cursor (overriding the chart's grab hand). */
+      cursor: default;
+      -webkit-user-select: text;
+      -moz-user-select: text;
+      -ms-user-select: text;
+      user-select: text;
+    }
+
+    /* Avatar photo at the top of the bubble (same source the chips use). */
+    .oc-popup .oc-popup-avatar {
+      display: block;
+      width: 72px;
+      height: 72px;
+      border-radius: 12px;
+      object-fit: cover;
+      margin: 0 0 12px;
+      -webkit-user-drag: none;
+      user-drag: none;
+    }
+
+    .oc-popup .oc-popup-name {
+      font-size: 20px;
+      font-weight: 700;
+      margin: 0 28px 12px 0;
+    }
+
+    /* Over selectable text: the I-beam cursor, and the text stays selectable. */
+    .oc-popup .oc-popup-name,
+    .oc-popup .oc-popup-row,
+    .oc-popup .oc-popup-label,
+    .oc-popup .oc-popup-value {
+      cursor: text;
+      -webkit-user-select: text;
+      -moz-user-select: text;
+      -ms-user-select: text;
+      user-select: text;
+    }
+
+    .oc-popup a,
+    .oc-popup .oc-popup-link {
+      color: var(--accent);
+      text-decoration: none;
+    }
+
+    /* The profile link and the × button keep the pointer hand. */
+    .oc-popup a,
+    .oc-popup .oc-popup-link,
+    .oc-popup .oc-popup-close {
+      cursor: pointer;
+    }
+
+    .oc-popup a:hover,
+    .oc-popup .oc-popup-link:hover {
+      text-decoration: underline;
+    }
+
+    .oc-popup .oc-popup-row {
+      margin: 6px 0;
+      white-space: normal;
+      word-break: break-word;
+    }
+
+    .oc-popup .oc-popup-label {
+      color: var(--ink-dim);
+    }
+
+    .oc-popup .oc-popup-close {
+      position: absolute;
+      top: 10px;
+      right: 12px;
+      width: 28px;
+      height: 28px;
+      line-height: 24px;
+      text-align: center;
+      border-radius: 50%;
+      border: 1px solid var(--chip-line);
+      background: var(--panel-2);
+      color: var(--ink);
+      font-size: 18px;
+      padding: 0;
+    }
+
+    .oc-popup .oc-popup-close:hover {
+      background: var(--panel);
+    }
+
+    /* Speech-bubble caret/tail: a two-triangle CSS shape (border color behind, fill in
+       front) that points at the clicked node. positionPopup() sets its left and toggles
+       -down (bubble above the node) vs -up (bubble below). */
+    .oc-popup .oc-popup-caret {
+      position: absolute;
+      width: 0;
+      height: 0;
+    }
+
+    .oc-popup .oc-popup-caret::before,
+    .oc-popup .oc-popup-caret::after {
+      content: '';
+      position: absolute;
+      width: 0;
+      height: 0;
+      border: solid transparent;
+    }
+
+    .oc-popup .oc-popup-caret-down {
+      bottom: 0;
+    }
+
+    .oc-popup .oc-popup-caret-down::before {
+      top: 0;
+      margin-left: -11px;
+      border-width: 11px;
+      border-top-color: var(--chip-line);
+    }
+
+    .oc-popup .oc-popup-caret-down::after {
+      top: 0;
+      margin-left: -10px;
+      border-width: 10px;
+      border-top-color: var(--chip-bg);
+    }
+
+    .oc-popup .oc-popup-caret-up {
+      top: 0;
+    }
+
+    .oc-popup .oc-popup-caret-up::before {
+      bottom: 0;
+      margin-left: -11px;
+      border-width: 11px;
+      border-bottom-color: var(--chip-line);
+    }
+
+    .oc-popup .oc-popup-caret-up::after {
+      bottom: 0;
+      margin-left: -10px;
+      border-width: 10px;
+      border-bottom-color: var(--chip-bg);
+    }
+  </style>
+</head>
+
+<body>
+  <header class="toolbar">
+    <span class="title">Org Chart Viewer</span>
+    <span class="mode-tag" id="modeTag">Before</span>
+    <label for="siteSelect">Site</label>
+    <select id="siteSelect" aria-label="Select a site"></select>
+    <button id="resetTopBtn" type="button" title="Re-root the chart back to the top person">Reset to top</button>
+    <button id="enhanceBtn" class="primary" type="button">Enhance &#9654;</button>
+    <button id="resetBtn" type="button">Reset</button>
+    <button id="fitBtn" type="button">Fit</button>
+    <button id="zoomInBtn" type="button" title="Zoom in">&#xFF0B;</button>
+    <button id="zoomOutBtn" type="button" title="Zoom out">&#x2212;</button>
+    <button id="hideLevelsBtn" type="button" title="Hide job-title levels (bottom-up)">Hide levels</button>
+    <label id="associatesLabel" title="Graft the synthetic front-line associates under their managers"><input
+        type="checkbox" id="associatesToggle"> Include associates</label>
+    <label id="compactLabel" title="Show each person as a large photo with their name only"><input type="checkbox"
+        id="compactToggle"> Compact People</label>
+    <label id="colorLabel" title="Tint each person's border by their role (fixed palette, top to bottom)"><input
+        type="checkbox" id="colorToggle"> Color by role</label>
+    <button id="expandAllBtn" type="button" title="Expand every collapsed node (hidden levels stay hidden)">Expand
+      All</button>
+    <span class="spacer"></span>
+    <span class="note">Synthetic demo data — no proprietary content</span>
+    <button id="fullscreenBtn" type="button">Fullscreen</button>
+  </header>
+
+  <main>
+    <section id="before" aria-label="Before: raw sprawling chart">
+      <div class="canvas-scroll">
+        <div class="canvas" id="rawCanvas"></div>
+      </div>
+      <aside class="mgmt-chain" id="mgmtChain" aria-label="Management chain above the top person"></aside>
+    </section>
+    <section id="after" aria-label="After: compact site-scoped chart"></section>
+  </main>
+
+  <!-- Hide-levels panel: one checkbox per distinct job title in the current chart,
+       ordered bottom-up. Checking a box HIDES that level (and every deeper level). -->
+  <div id="hideLevelsPanel" aria-label="Hide levels"></div>
+
+  <!-- Engine first, then synthetic data; both attach globals (OrgChartCore / FAKE_ORG). -->
+  <script src="orgchart.core.js"></script>
+  <script src="fake-data.js"></script>
+  <script>
+    (function () {
+      'use strict';
+
+      var OC = window.OrgChartCore;
+      var ROOT = window.FAKE_ORG;
+
+      // ---- Persisted view settings (localStorage; same spirit as the production host) ----
+      // Remembers the selected Site, "Compact People" (default OFF) and "Color by role"
+      // (default ON) across visits. Wrapped in try/catch so a restricted file:// context
+      // degrades silently to the defaults.
+      var SETTINGS = { SITE: 'oc-demo-site', COMPACT: 'oc-demo-compact-people', COLOR: 'oc-demo-color-by-role' };
+      function readBoolSetting(key, dflt) {
+        try { var v = window.localStorage.getItem(key); if (v === null || v === undefined) { return dflt; } return v === '1' || v === 'true'; } catch (e) { return dflt; }
+      }
+      function writeBoolSetting(key, on) { try { window.localStorage.setItem(key, on ? '1' : '0'); } catch (e) { } }
+      function readSiteSetting() { try { return window.localStorage.getItem(SETTINGS.SITE) || null; } catch (e) { return null; } }
+      function writeSiteSetting(v) { try { if (v) { window.localStorage.setItem(SETTINGS.SITE, String(v)); } } catch (e) { } }
+
+      // ---- Inline SVG monogram avatar (deterministic color from name) --------------
+      // No external image requests: every avatar is a self-contained data-URI so the
+      // demo is fully offline / kiosk-reliable.
+      function initials(name) {
+        var parts = String(name || '').trim().split(/\s+/);
+        var a = parts[0] ? parts[0].charAt(0) : '';
+        var b = parts.length > 1 ? parts[parts.length - 1].charAt(0) : '';
+        return (a + b).toUpperCase() || '?';
+      }
+      function hueFor(name) {
+        var h = 0; name = String(name || '');
+        for (var i = 0; i < name.length; i++) { h = (h * 31 + name.charCodeAt(i)) >>> 0; }
+        return h % 360;
+      }
+      function monogram(node) {
+        var name = (node.data && node.data.full_name) || node.id;
+        var hue = hueFor(name);
+        var bg = 'hsl(' + hue + ',52%,42%)';
+        var txt = initials(name);
+        var svg =
+          '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80" viewBox="0 0 80 80">' +
+          '<rect width="80" height="80" rx="12" fill="' + bg + '"/>' +
+          '<text x="40" y="44" font-family="Segoe UI,Arial,sans-serif" font-size="32" ' +
+          'font-weight="600" fill="#ffffff" text-anchor="middle" ' +
+          'dominant-baseline="middle">' + txt + '</text>' +
+          '</svg>';
+        return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+      }
+
+      // The node the chart is currently rooted at. Starts at the full-tree root; the popup
+      // "Set as anchor" control re-roots it in memory and "Reset to top" restores ROOT.
+      var displayRoot = ROOT;
+
+      // ---- Site selector populated from the engine's distinctSites ------------------
+      // Rebuilds #siteSelect from the given tree's sites, preserving the current selection
+      // when it still exists (so a re-root keeps the chosen site when possible).
+      var siteSelect = document.getElementById('siteSelect');
+      function populateSites(tree) {
+        var sites = OC.distinctSites(tree);
+        var prev = siteSelect.value;
+        siteSelect.innerHTML = '';
+        sites.forEach(function (code) {
+          var opt = document.createElement('option');
+          opt.value = code; opt.textContent = code;
+          siteSelect.appendChild(opt);
+        });
+        if (sites.indexOf(prev) !== -1) {
+          siteSelect.value = prev;
+        } else {
+          // Default to the demoable split site when present (otherwise the first site).
+          siteSelect.value = sites.indexOf('NDC1') !== -1 ? 'NDC1' : (sites[0] || '');
+        }
+      }
+      populateSites(ROOT);
+      // Restore the remembered Site (pre-select only; the load gate still requires a click to
+      // render — we never auto-start a load here).
+      (function restoreSavedSite() {
+        var saved = readSiteSetting();
+        if (saved) {
+          for (var i = 0; i < siteSelect.options.length; i++) {
+            if (siteSelect.options[i].value === saved) { siteSelect.value = saved; break; }
+          }
+        }
+      })();
+
+      // ---- BEFORE: expand/collapse state (explicit expanded-set + reset rule) -------
+      // Mirrors the engine's model: a node's children are shown only when its id is in
+      // `beforeExpanded`. BEFORE opens collapsed to just the top person + their immediate
+      // reports (expanded = { root }); every deeper node starts collapsed and is drilled
+      // into via its +/- toggle. RESET RULE: collapsing a node discards the expansion of
+      // its entire subtree, so re-expanding it later reveals only its immediate children
+      // (each itself collapsed) — a previously-expanded grandchild does NOT reappear.
+      var beforeExpanded = new Set();
+      function initBeforeExpand() {
+        beforeExpanded = new Set();
+        beforeExpanded.add(ROOT.id); // top person + their direct reports (each collapsed)
+      }
+      function collapseSubtreeBefore(node) {
+        if (!node) { return; }
+        beforeExpanded.delete(node.id);
+        var kids = node.children || [];
+        for (var i = 0; i < kids.length; i++) { collapseSubtreeBefore(kids[i]); }
+      }
+      function toggleBefore(node) {
+        if (beforeExpanded.has(node.id)) { collapseSubtreeBefore(node); }
+        else { beforeExpanded.add(node.id); }   // expanding adds ONLY this node
+      }
+
+      // ---- Inline-SVG +/- toggle and root up-arrow (no external images) -------------
+      var svgNS = 'http://www.w3.org/2000/svg';
+      function toggleSvg(expanded) {
+        var svg = document.createElementNS(svgNS, 'svg');
+        svg.setAttribute('width', '16'); svg.setAttribute('height', '16');
+        svg.setAttribute('viewBox', '0 0 16 16');
+        var rect = document.createElementNS(svgNS, 'rect');
+        rect.setAttribute('x', '0.5'); rect.setAttribute('y', '0.5');
+        rect.setAttribute('width', '15'); rect.setAttribute('height', '15');
+        rect.setAttribute('rx', '3'); rect.setAttribute('fill', '#ffffff');
+        rect.setAttribute('stroke', '#8a99a8');
+        svg.appendChild(rect);
+        var h = document.createElementNS(svgNS, 'line');
+        h.setAttribute('x1', '4'); h.setAttribute('y1', '8');
+        h.setAttribute('x2', '12'); h.setAttribute('y2', '8');
+        h.setAttribute('stroke', '#334'); h.setAttribute('stroke-width', '1.6');
+        svg.appendChild(h);
+        if (!expanded) { // a '+' adds the vertical stroke; '-' is just the horizontal one
+          var v = document.createElementNS(svgNS, 'line');
+          v.setAttribute('x1', '8'); v.setAttribute('y1', '4');
+          v.setAttribute('x2', '8'); v.setAttribute('y2', '12');
+          v.setAttribute('stroke', '#334'); v.setAttribute('stroke-width', '1.6');
+          svg.appendChild(v);
+        }
+        return svg;
+      }
+      function upArrowSvg() {
+        var svg = document.createElementNS(svgNS, 'svg');
+        svg.setAttribute('class', 'rn-up'); svg.setAttribute('viewBox', '0 0 18 14');
+        var p = document.createElementNS(svgNS, 'path');
+        p.setAttribute('d', 'M9 1 L16 11 L2 11 Z');
+        p.setAttribute('fill', '#8a99a8');
+        svg.appendChild(p);
+        return svg;
+      }
+
+      // ---- BEFORE: top-down tree layout ---------------------------------------------
+      // Post-order leaf cursor: each visible leaf consumes one slot left-to-right, each
+      // parent is centered over the span of its children, depth = row index. A node's
+      // children are laid out only when it is expanded, so collapsing shrinks the tree.
+      // No scaling — the tree is reached by click-drag transform panning (not scrollbars).
+      var RAW = { nodeW: 92, nodeH: 96, hGap: 28, rowGap: 56, padX: 40, padY: 30 };
+
+      function layoutRaw(root) {
+        var placed = [];
+        var edges = [];
+        var cursor = RAW.padX;
+        var rowH = RAW.nodeH + RAW.rowGap;
+
+        function place(node, depth) {
+          var kids = beforeExpanded.has(node.id) ? (node.children || []) : [];
+          var x;
+          if (!kids.length) {
+            x = cursor;
+            cursor += RAW.nodeW + RAW.hGap;
+          } else {
+            var first = null, last = null;
+            for (var i = 0; i < kids.length; i++) {
+              var cx = place(kids[i], depth + 1);
+              if (first === null) { first = cx; }
+              last = cx;
+              edges.push({ from: node.id, to: kids[i].id });
+            }
+            x = (first + last) / 2;
+          }
+          placed.push({ node: node, x: x, y: RAW.padY + depth * rowH, depth: depth });
+          return x;
+        }
+        place(root, 0);
+
+        var maxRight = 0, maxBottom = 0;
+        placed.forEach(function (p) {
+          maxRight = Math.max(maxRight, p.x + RAW.nodeW);
+          maxBottom = Math.max(maxBottom, p.y + RAW.nodeH);
+        });
+        return { placed: placed, edges: edges, w: maxRight + RAW.padX, h: maxBottom + RAW.padY };
+      }
+
+      // Free transform-pan state for the BEFORE canvas (set once, then nudged on drag).
+      var beforeView = null;
+
+      function renderBefore() {
+        var canvas = document.getElementById('rawCanvas');
+        canvas.innerHTML = '';
+        var lay = layoutRaw(ROOT);
+        canvas.style.width = lay.w + 'px';
+        canvas.style.height = lay.h + 'px';
+
+        var pos = {};
+        lay.placed.forEach(function (p) { pos[p.node.id] = p; });
+
+        // Connector lines (parent bottom-center -> child top-center).
+        var svg = document.createElementNS(svgNS, 'svg');
+        svg.setAttribute('class', 'raw-edges');
+        svg.setAttribute('width', String(lay.w));
+        svg.setAttribute('height', String(lay.h));
+        lay.edges.forEach(function (ed) {
+          var f = pos[ed.from], t = pos[ed.to];
+          if (!f || !t) { return; }
+          var x1 = f.x + RAW.nodeW / 2, y1 = f.y + RAW.nodeH;
+          var x2 = t.x + RAW.nodeW / 2, y2 = t.y;
+          var my = (y1 + y2) / 2;
+          var path = document.createElementNS(svgNS, 'path');
+          path.setAttribute('d', 'M' + x1 + ',' + y1 + ' C' + x1 + ',' + my + ' ' + x2 + ',' + my + ' ' + x2 + ',' + y2);
+          svg.appendChild(path);
+        });
+        canvas.appendChild(svg);
+
+        // Nodes: square avatar, login beneath, +/- toggle (and an up-arrow on the root).
+        lay.placed.forEach(function (p) {
+          var d = p.node.data || {};
+          var node = document.createElement('div');
+          node.className = 'raw-node';
+          node.style.left = p.x + 'px';
+          node.style.top = p.y + 'px';
+          node.title = (d.full_name || p.node.id) + (d.job_title ? (' \u2014 ' + d.job_title) : '');
+
+          if (p.node === ROOT) { node.appendChild(upArrowSvg()); }
+
+          var img = document.createElement('img');
+          img.className = 'rn-photo'; img.alt = ''; img.src = monogram(p.node);
+          node.appendChild(img);
+
+          var login = document.createElement('div');
+          login.className = 'rn-login'; login.textContent = p.node.id;
+          node.appendChild(login);
+
+          // +/- toggle for any node that HAS real children. Re-runs the layout on toggle.
+          if ((p.node.children || []).length) {
+            var tog = document.createElement('button');
+            tog.className = 'raw-toggle';
+            tog.type = 'button';
+            var isExp = beforeExpanded.has(p.node.id);
+            tog.setAttribute('aria-label', isExp ? 'Collapse' : 'Expand');
+            tog.appendChild(toggleSvg(isExp));
+            (function (nd) {
+              tog.addEventListener('click', function (ev) {
+                ev.stopPropagation();
+                toggleBefore(nd);
+                renderBefore();
+              });
+            })(p.node);
+            node.appendChild(tog);
+          }
+
+          canvas.appendChild(node);
+        });
+
+        // First paint: center the top person near the top of the viewport. Thereafter the
+        // user-dragged transform is preserved across re-layouts.
+        if (!beforeView) {
+          var scroller = document.querySelector('#before .canvas-scroll');
+          var vw = (scroller && scroller.clientWidth) || window.innerWidth;
+          var rootPos = pos[ROOT.id];
+          var rootCenter = rootPos ? rootPos.x + RAW.nodeW / 2 : lay.w / 2;
+          beforeView = { x: Math.round(vw / 2 - rootCenter), y: 20 };
+        }
+        canvas.style.transform = 'translate(' + beforeView.x + 'px,' + beforeView.y + 'px)';
+
+        renderMgmtChain();
+      }
+
+      // Neutral, light replica of the native right-side "Management Chain" rail: the
+      // top-down list of people ABOVE the person at the top of the chart. The synthetic
+      // root has no real parent, so we show a short SYNTHETIC chain above it.
+      function renderMgmtChain() {
+        var el = document.getElementById('mgmtChain');
+        el.innerHTML = '';
+        var h2 = document.createElement('h2');
+        h2.textContent = 'Management Chain';
+        el.appendChild(h2);
+
+        var top = ROOT.data || {};
+        var chain = [
+          { id: 'jvale', full_name: 'Jordan Vale', job_title: 'VP, Operations' },
+          { id: 'mreyes', full_name: 'Morgan Reyes', job_title: 'Senior Director' },
+          { id: ROOT.id, full_name: top.full_name || ROOT.id, job_title: top.job_title || '' }
+        ];
+
+        chain.forEach(function (person, i) {
+          var item = document.createElement('div');
+          item.className = 'mc-item';
+          var img = document.createElement('img');
+          img.alt = ''; img.src = monogram({ data: person, id: person.id });
+          var login = document.createElement('div');
+          login.className = 'mc-login'; login.textContent = person.id;
+          var name = document.createElement('div');
+          name.className = 'mc-name'; name.textContent = person.full_name;
+          item.appendChild(img); item.appendChild(login); item.appendChild(name);
+          el.appendChild(item);
+          if (i < chain.length - 1) {
+            var arrow = document.createElement('div');
+            arrow.className = 'mc-arrow'; arrow.textContent = '\u2193';
+            el.appendChild(arrow);
+          }
+        });
+      }
+
+      // ---- BEFORE: free click-drag transform panning --------------------------------
+      // Pointer Events translate the canvas with NO bounds clamp (a single visible node
+      // can be dragged to any corner) under overflow:hidden, so there are never
+      // scrollbars. Mouse + touch. Pointerdown bails on a +/- toggle so toggles stay
+      // clickable.
+      function setupBeforePan() {
+        var scroller = document.querySelector('#before .canvas-scroll');
+        var canvas = document.getElementById('rawCanvas');
+        if (!scroller || scroller._ocPan) { return; }
+        scroller._ocPan = true;
+        scroller.style.touchAction = 'none';
+        var panning = false, sx = 0, sy = 0, ox = 0, oy = 0;
+        scroller.addEventListener('pointerdown', function (ev) {
+          if (ev.target && ev.target.closest && ev.target.closest('.raw-toggle')) { return; }
+          panning = true; sx = ev.clientX; sy = ev.clientY;
+          ox = beforeView ? beforeView.x : 0; oy = beforeView ? beforeView.y : 0;
+          scroller.style.cursor = 'grabbing';
+          try { scroller.setPointerCapture(ev.pointerId); } catch (e) { }
+        });
+        scroller.addEventListener('pointermove', function (ev) {
+          if (!panning || !beforeView) { return; }
+          beforeView.x = ox + (ev.clientX - sx);
+          beforeView.y = oy + (ev.clientY - sy);
+          canvas.style.transform = 'translate(' + beforeView.x + 'px,' + beforeView.y + 'px)';
+        });
+        function end(ev) {
+          if (!panning) { return; }
+          panning = false; scroller.style.cursor = 'grab';
+          try { scroller.releasePointerCapture(ev.pointerId); } catch (e) { }
+        }
+        scroller.addEventListener('pointerup', end);
+        scroller.addEventListener('pointercancel', end);
+      }
+
+      // ---- AFTER: compact engine output ---------------------------------------------
+      var afterController = null;
+      // PERSISTENT hide-by-title state (source of truth for the checkboxes). Survives the
+      // panel closing/reopening and re-renders of the same site; narrowed to the new chart's
+      // titles on a site change (below). Passed into renderSiteChart as opts.hiddenTitles.
+      var afterHiddenTitles = new Set();
+      function renderAfter(preserveView) {
+        var after = document.getElementById('after');
+        var site = siteSelect.value;
+        afterController = OC.renderSiteChart(after, displayRoot, site, function () {
+          return { w: after.clientWidth || 1920, h: after.clientHeight || 1080 };
+        }, {
+          resolveAvatar: monogram,
+          // Preserve the viewport (zoom + pan, anchored on the center-most node) across this
+          // re-render when asked — used by the Include-associates toggle so it keeps the view
+          // instead of snapping to Fit. Enhance / site change / re-root pass nothing (refit).
+          preserveView: !!preserveView,
+          // Generic placeholder host keeps the portfolio demo free of forbidden strings
+          // while still exercising the popup's new-tab profile link.
+          resolveProfileUrl: function (node) {
+            return node.data && node.data.isAssociate
+              ? 'https://example.com/e/' + encodeURIComponent(node.id)
+              : 'https://example.com/u/' + encodeURIComponent(node.id);
+          },
+          // In-memory re-root from the popup "Set as anchor" control: root the fake tree at
+          // the clicked node, refresh the site dropdown from its subtree, and re-render.
+          onSetAnchor: function (node) {
+            displayRoot = node;
+            populateSites(displayRoot);
+            renderAfter();
+          },
+          // Persisted hide-by-title state (survives panel close/reopen and re-renders).
+          hiddenTitles: afterHiddenTitles,
+          // Persisted view toggles applied on (re-)render: Compact People (default OFF),
+          // Color by role (default ON). The toolbar checkboxes are the source of truth.
+          compact: compactToggle ? compactToggle.checked : readBoolSetting(SETTINGS.COMPACT, false),
+          colorByRole: colorToggle ? colorToggle.checked : readBoolSetting(SETTINGS.COLOR, true)
+        });
+        // Narrow the persistent hidden-title set to titles that still exist in THIS chart
+        // (drop any carried over from a previous site). Re-apply if anything was dropped.
+        var present = {};
+        var curTiers = afterController.getTitleTiers ? afterController.getTitleTiers() : [];
+        curTiers.forEach(function (t) { t.titles.forEach(function (title) { present[title] = true; }); });
+        var changed = false;
+        Array.from(afterHiddenTitles).forEach(function (title) {
+          if (!present[title]) { afterHiddenTitles.delete(title); changed = true; }
+        });
+        if (changed && afterController.applyTitleHide) { afterController.applyTitleHide(afterHiddenTitles); }
+        // Rebuild the hide-levels list so it matches the new site's title tiers (checkboxes
+        // reflect the persisted hidden state) if the panel is open.
+        if (hideLevelsPanel && hideLevelsPanel.classList.contains('open')) {
+          rebuildHideLevelsPanel();
+        }
+      }
+
+      // ---- Mode switching -----------------------------------------------------------
+      var beforeEl = document.getElementById('before');
+      var afterEl = document.getElementById('after');
+      var modeTag = document.getElementById('modeTag');
+
+      function showBefore() {
+        beforeEl.style.display = 'flex';
+        afterEl.style.display = 'none';
+        modeTag.textContent = 'Before';
+        // Force-close the hide panel AND tear down its outside-click listener so it never
+        // leaks when switching back to the Before view.
+        closeHideLevelsPanel();
+      }
+      function showAfter() {
+        beforeEl.style.display = 'none';
+        afterEl.style.display = 'block';
+        modeTag.textContent = 'After \u2014 ' + siteSelect.value;
+        renderAfter();
+      }
+
+      // ---- Load gate: dim + single-flight guard (shared OrgChartCore state machine) ----
+      // The toolbar starts DIMMED and non-interactive (NOT_LOADED). Clicking the dimmed
+      // toolbar kicks off the first "load" (the Enhance render). The single-flight guard in
+      // createLoadGate IGNORES any second load request that arrives while one is already in
+      // progress — the fix for the "clicking the dropdown while loading starts a second
+      // concurrent load" bug. This demo's render is instant, so we simulate a short load delay
+      // to make the LOADING state (and the guard) real/observable, mirroring the real crawl.
+      var toolbarEl = document.querySelector('header.toolbar');
+      var toolbarHint = document.createElement('div');
+      toolbarHint.id = 'toolbarHint';
+      document.body.appendChild(toolbarHint);
+      var LOAD_SIM_MS = (typeof window.__ocLoadSimMs === 'number') ? window.__ocLoadSimMs : 300;
+      window.__ocLoadRuns = 0; // test seam: how many loads have ACTUALLY run (one per settle)
+      var loadTimer = null;
+
+      // Drive the toolbar's dimmed/disabled appearance from the gate state. Uses the literal
+      // state strings (not loadGate.STATES) because this runs during createLoadGate's initial
+      // emit(), before the loadGate variable has been assigned.
+      function applyToolbarState(s) {
+        var loaded = (s === 'loaded');
+        var controls = toolbarEl.querySelectorAll('select, button, input');
+        for (var i = 0; i < controls.length; i++) { controls[i].disabled = !loaded; }
+        if (loaded) {
+          toolbarEl.classList.remove('dim');
+          toolbarHint.style.display = 'none';
+        } else {
+          toolbarEl.classList.add('dim');
+          toolbarHint.textContent = (s === 'loading') ? 'Loading chart\u2026' : 'Click to load chart';
+          toolbarHint.classList.toggle('loading', s === 'loading');
+          toolbarHint.style.height = toolbarEl.offsetHeight + 'px';
+          toolbarHint.style.display = 'flex';
+        }
+      }
+
+      var loadGate = OC.createLoadGate({
+        runLoad: function (trigger, done) {
+          // Simulate the production crawl's load time so the LOADING gate is observable and a
+          // second concurrent load can be shown to be blocked.
+          if (loadTimer) { clearTimeout(loadTimer); }
+          loadTimer = setTimeout(function () {
+            loadTimer = null;
+            if (window.__ocForceLoadError) { done(false); return; } // test seam: error path
+            try {
+              window.__ocLoadRuns++;
+              showAfter();
+              done(true);
+            } catch (e) {
+              done(false);
+            }
+          }, LOAD_SIM_MS);
+        },
+        onState: applyToolbarState
+      });
+      window.__ocLoadGate = loadGate; // test seam
+
+      // Clicking the dimmed toolbar (its hint overlay) starts the first load; a click that
+      // lands during LOADING is a no-op (the single-flight guard ignores it).
+      toolbarHint.addEventListener('click', function () { loadGate.requestLoad('enhance'); });
+
+      // Enhance / Reset. Enhance routes through the gate (so a re-enhance also re-guards);
+      // Reset drops back to the BEFORE view but keeps the gate LOADED so the toolbar stays
+      // active (a prior chart is still available to re-enhance — no artificial re-dim).
+      document.getElementById('enhanceBtn').addEventListener('click', function () { loadGate.requestLoad('enhance'); });
+      document.getElementById('resetBtn').addEventListener('click', showBefore);
+      // Reset to top: undo any in-memory "Set as anchor" re-root, restoring the full tree.
+      document.getElementById('resetTopBtn').addEventListener('click', function () {
+        displayRoot = ROOT;
+        populateSites(ROOT);
+        if (afterEl.style.display !== 'none') { renderAfter(); }
+      });
+      // Fit re-fits the CURRENT after render (afterController is reassigned by renderAfter).
+      document.getElementById('fitBtn').addEventListener('click', function () {
+        if (afterController && afterController.resetView) { afterController.resetView(); }
+      });
+      // Zoom in / out step toward the viewport center; no-op until a chart is rendered.
+      document.getElementById('zoomInBtn').addEventListener('click', function () {
+        if (afterController && afterController.zoomBy) { afterController.zoomBy(1.2); }
+      });
+      document.getElementById('zoomOutBtn').addEventListener('click', function () {
+        if (afterController && afterController.zoomBy) { afterController.zoomBy(1 / 1.2); }
+      });
+      // Expand All: re-expand every manually-collapsed node (hidden title tiers stay hidden).
+      document.getElementById('expandAllBtn').addEventListener('click', function () {
+        if (afterController && afterController.expandAll) { afterController.expandAll(); }
+      });
+
+      // ---- Hide-levels panel: hide job-title tiers bottom-up ------------------------
+      var hideLevelsBtn = document.getElementById('hideLevelsBtn');
+      var hideLevelsPanel = document.getElementById('hideLevelsPanel');
+
+      // Rebuild the checkbox list from the current render's title tiers. ONE checkbox per
+      // TIER (relationship-grouped titles share a row), ordered senior at the TOP ->
+      // deepest/most-junior at the BOTTOM. Each box is pre-checked to REFLECT the persistent
+      // afterHiddenTitles, so closing + reopening the panel (or a re-render) shows the right
+      // boxes checked and the user can uncheck them.
+      function rebuildHideLevelsPanel() {
+        hideLevelsPanel.innerHTML = '';
+        var h = document.createElement('h3');
+        h.textContent = 'Hide levels (check to hide):';
+        hideLevelsPanel.appendChild(h);
+        var hint = document.createElement('p');
+        hint.className = 'hint';
+        hint.textContent = 'Checking a level hides it and every level below it.';
+        hideLevelsPanel.appendChild(hint);
+
+        var tiers = (afterController && afterController.getTitleTiers)
+          ? afterController.getTitleTiers() : [];
+        if (!tiers.length) {
+          var empty = document.createElement('div');
+          empty.className = 'empty';
+          empty.textContent = 'No chart rendered yet.';
+          hideLevelsPanel.appendChild(empty);
+          return;
+        }
+
+        var boxes = [];
+
+        function applyHide() {
+          // Write the collected titles back into the PERSISTENT afterHiddenTitles (same
+          // object), so the hidden state survives the panel closing/reopening and re-renders.
+          afterHiddenTitles.clear();
+          boxes.forEach(function (b) {
+            if (b.checked && b._ocTitles) {
+              b._ocTitles.forEach(function (t) { afterHiddenTitles.add(t); });
+            }
+          });
+          if (afterController && afterController.applyTitleHide) {
+            afterController.applyTitleHide(afterHiddenTitles);
+          }
+        }
+
+        // tiers[] is senior -> junior (tierIndex 0 = top). Render in array order so the
+        // most senior tier is at the top and the deepest/most-junior tier at the bottom.
+        tiers.forEach(function (tier) {
+          var label = document.createElement('label');
+          var cb = document.createElement('input');
+          cb.type = 'checkbox';
+          cb.setAttribute('data-tier', String(tier.tierIndex));
+          cb._ocTitles = tier.titles;
+          // Hiding the very top tier would hide everyone — disable it.
+          if (tier.tierIndex === 0 && tiers.length > 1) {
+            cb.disabled = true;
+            label.className = 'disabled';
+          }
+          // Pre-check to reflect the persistent hidden-title state.
+          if (!cb.disabled && tier.titles.some(function (t) { return afterHiddenTitles.has(t); })) {
+            cb.checked = true;
+          }
+          label.appendChild(cb);
+          label.appendChild(document.createTextNode(' ' + tier.titles.join(' / ')));
+          hideLevelsPanel.appendChild(label);
+          boxes.push(cb);
+          cb.addEventListener('change', function () {
+            var ti = parseInt(cb.getAttribute('data-tier'), 10);
+            // Cumulative, senior-at-top: checking a tier auto-checks every tier BELOW it
+            // (more junior = higher tierIndex); unchecking a tier auto-unchecks every tier
+            // ABOVE it (more senior = lower tierIndex). The hidden set is always a
+            // contiguous run from the BOTTOM, and unchecking a tier LEAVES the lower tiers
+            // that were auto-checked still checked (partial-uncheck preserved).
+            boxes.forEach(function (other) {
+              if (other.disabled) { return; }
+              var oi = parseInt(other.getAttribute('data-tier'), 10);
+              if (cb.checked) { if (oi > ti) { other.checked = true; } }
+              else { if (oi < ti) { other.checked = false; } }
+            });
+            applyHide();
+          });
+        });
+      }
+
+      // Document-level listener (capture) that closes the panel on an OUTSIDE pointer/tap or
+      // Esc. Installed exactly once per open and removed on close, so it never leaks or stacks.
+      // A click inside the panel or on the Hide-levels button is ignored here (the button's
+      // own handler toggles).
+      var hideOutsideHandler = null;
+      function closeHideLevelsPanel() {
+        hideLevelsPanel.classList.remove('open');
+        if (hideOutsideHandler) {
+          document.removeEventListener('pointerdown', hideOutsideHandler, true);
+          document.removeEventListener('keydown', hideOutsideHandler, true);
+          hideOutsideHandler = null;
+        }
+      }
+      function openHideLevelsPanel() {
+        rebuildHideLevelsPanel();
+        var tb = document.querySelector('header.toolbar');
+        hideLevelsPanel.style.bottom = ((tb ? tb.offsetHeight : 56) + 8) + 'px';
+        hideLevelsPanel.classList.add('open');
+        if (!hideOutsideHandler) {
+          hideOutsideHandler = function (ev) {
+            if (ev.type === 'keydown') {
+              if (ev.key === 'Escape') { closeHideLevelsPanel(); }
+              return;
+            }
+            var t = ev.target;
+            if (t && t.closest && (t.closest('#hideLevelsPanel') || t.closest('#hideLevelsBtn'))) { return; }
+            closeHideLevelsPanel();
+          };
+          document.addEventListener('pointerdown', hideOutsideHandler, true);
+          document.addEventListener('keydown', hideOutsideHandler, true);
+        }
+      }
+
+      hideLevelsBtn.addEventListener('click', function () {
+        if (hideLevelsPanel.classList.contains('open')) { closeHideLevelsPanel(); }
+        else { openHideLevelsPanel(); }
+      });
+
+      // ---- Include associates: graft the synthetic associate list under their managers ----
+      // Demonstrates the SAME OrgChartCore.graftAssociates helper production uses, with a
+      // fully synthetic list (no brand/URL/PII). On check: record the associate logins, graft
+      // under displayRoot, re-render. On uncheck: strip those logins back out and re-render.
+      var FAKE_ASSOCIATES = window.FAKE_ASSOCIATES || [];
+      var associateLogins = new Set();
+      var associateTitles = new Set(); // job titles of grafted associates (seeded into afterHiddenTitles so the associate tier default-hides; cleared on uncheck)
+      var associatesToggle = document.getElementById('associatesToggle');
+      function removeAssociates(rootNode) {
+        (function walk(node) {
+          if (!node || !node.children) { return; }
+          node.children = node.children.filter(function (c) { return !associateLogins.has(c.id); });
+          node.children.forEach(walk);
+        })(rootNode);
+      }
+      associatesToggle.addEventListener('change', function () {
+        if (associatesToggle.checked) {
+          FAKE_ASSOCIATES.forEach(function (a) {
+            if (a.login) { associateLogins.add(a.login); }
+            if (a.job_title) { associateTitles.add(a.job_title); }
+          });
+          // Default-hide the grafted associate tier(s): seed their titles into the
+          // persistent hidden set BEFORE grafting/re-rendering so the demo's synthetic L1s
+          // start hidden (chart doesn't balloon) and each manager shows the "+N" reveal.
+          associateTitles.forEach(function (t) { afterHiddenTitles.add(t); });
+          OC.graftAssociates(displayRoot, FAKE_ASSOCIATES);
+        } else {
+          removeAssociates(displayRoot);
+          // Clear the seeded associate hidden-tier state so no empty tier/checkbox lingers.
+          associateTitles.forEach(function (t) { afterHiddenTitles.delete(t); });
+          associateTitles.clear();
+          associateLogins.clear();
+        }
+        // Preserve the viewport across the toggle re-render (keep zoom/pan around the center).
+        if (afterEl.style.display !== 'none') { renderAfter(true); }
+      });
+
+      // ---- Compact People / Color by role toggles --------------------------------------
+      // Both persist and re-render in place (preserving zoom/pan) via the controller. Initial
+      // checked state is restored from storage; defaults are Compact OFF, Color ON.
+      var compactToggle = document.getElementById('compactToggle');
+      var colorToggle = document.getElementById('colorToggle');
+      compactToggle.checked = readBoolSetting(SETTINGS.COMPACT, false);
+      colorToggle.checked = readBoolSetting(SETTINGS.COLOR, true);
+      compactToggle.addEventListener('change', function () {
+        writeBoolSetting(SETTINGS.COMPACT, compactToggle.checked);
+        if (afterController && afterController.setCompact) { afterController.setCompact(compactToggle.checked); }
+      });
+      colorToggle.addEventListener('change', function () {
+        writeBoolSetting(SETTINGS.COLOR, colorToggle.checked);
+        if (afterController && afterController.setColorByRole) { afterController.setColorByRole(colorToggle.checked); }
+      });
+
+      // Fullscreen toggle (Fullscreen API) so viewers don't need the F11 shortcut.
+      var fullscreenBtn = document.getElementById('fullscreenBtn');
+      fullscreenBtn.addEventListener('click', function () {
+        var el = document.documentElement;
+        var fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+        if (!fsEl) {
+          var req = el.requestFullscreen || el.webkitRequestFullscreen;
+          if (req) { req.call(el); }
+        } else {
+          var exit = document.exitFullscreen || document.webkitExitFullscreen;
+          if (exit) { exit.call(document); }
+        }
+      });
+      function syncFullscreenLabel() {
+        var fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+        fullscreenBtn.textContent = fsEl ? 'Exit Fullscreen' : 'Fullscreen';
+      }
+      document.addEventListener('fullscreenchange', syncFullscreenLabel);
+      document.addEventListener('webkitfullscreenchange', syncFullscreenLabel);
+      // Re-run the AFTER view when the site changes while in After mode — through the load
+      // gate so a site switch goes back through LOADING and is re-guarded (no second
+      // concurrent load). The dropdown is disabled unless the gate is LOADED, so a change
+      // only ever fires from an active toolbar.
+      siteSelect.addEventListener('change', function () {
+        writeSiteSetting(siteSelect.value); // remember the site for the next visit
+        if (afterEl.style.display !== 'none') { loadGate.requestLoad('site:' + siteSelect.value); }
+      });
+
+      // Initial paint: BEFORE tree, collapsed to the top person + their direct reports.
+      initBeforeExpand();
+      renderBefore();
+      showBefore();
+      setupBeforePan();
+    })();
+  </script>
+</body>
+
+</html>
